@@ -9,6 +9,8 @@ use solana_program::{
 use crate::{state::RewardInstruction};
 mod state;
 mod instructions;
+mod helpers;
+mod constants;
 
 entrypoint!(process_instruction);
 
