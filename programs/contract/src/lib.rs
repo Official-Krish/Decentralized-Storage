@@ -52,7 +52,7 @@ pub fn process_instruction(
        evidence_hash,
     } => instructions::challenge_proof(program_id, accounts, epoch_id, evidence_hash),
 
-    RewardInstruction::FinalizeEpoch { epoch_id } => instructions::finalize_espoch(program_id, accounts, epoch_id),
+    RewardInstruction::FinalizeEpoch { epoch_id } => instructions::finalize_epoch(program_id, accounts, epoch_id),
 
     RewardInstruction::Stake { amount } => {
       instructions::stake_tokens(program_id, accounts, amount)

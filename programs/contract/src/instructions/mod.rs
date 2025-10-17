@@ -6,7 +6,7 @@ pub mod challenge_proof;
 pub mod stake_tokens;
 pub mod unstake_tokens;
 pub mod slash_miner;
-pub mod finalize_espoch;
+pub mod finalize_epoch;
 
 pub use initialise::*;
 pub use register_object::*;
@@ -16,4 +16,4 @@ pub use challenge_proof::*;
 pub use stake_tokens::*;
 pub use unstake_tokens::*;
 pub use slash_miner::*;
-pub use finalize_espoch::*;
+pub use finalize_epoch::*;
