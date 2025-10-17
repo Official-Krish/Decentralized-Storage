@@ -1,10 +1,8 @@
+#![allow(unexpected_cfgs)]
 
 use borsh::BorshDeserialize;
 use pinocchio::{
-  entrypoint, msg, pubkey::Pubkey, ProgramResult
-};
-use solana_program::{
-  account_info::AccountInfo,
+  account_info::AccountInfo, entrypoint, msg, pubkey::Pubkey, ProgramResult
 };
 use crate::{state::RewardInstruction};
 mod state;
@@ -33,28 +31,40 @@ pub fn process_instruction(
       emission_cap,
     } => instructions::initialize(program_id, accounts, decay_numerator, decay_denom, emission_cap),
 
-    RewardInstruction::RegisterProof {
-      merkle_root,
-      total_chunks,
-      proof_id,
-    } => instructions::register_proof(program_id, accounts, merkle_root, total_chunks, proof_id),
+    RewardInstruction::RegisterObject {
+      commitment,
+      proof_type,
+      size,
+      retention_epochs,
+      object_id,
+    } => instructions::register_object(program_id, accounts, commitment, proof_type, size, retention_epochs, object_id),
 
-    RewardInstruction::CreateChallenge { proof_id } => 
-      instructions::create_challenge(program_id, accounts, proof_id),
+    RewardInstruction::CreateEpoch { object_id, nonce, epoch_id } =>
+      instructions::create_epoch(program_id, accounts, object_id, nonce, epoch_id),
 
     RewardInstruction::SubmitProof {
-      challenge_id,
+      epoch_id,
       proof_hash,
-    } => instructions::submit_proof(program_id, accounts, challenge_id, proof_hash),
+    } => instructions::submit_proof(program_id, accounts, epoch_id, proof_hash),
 
-    RewardInstruction::ClaimRewards {} => instructions::claim_reward(program_id, accounts),
+    RewardInstruction::ChallengeProof {
+       epoch_id,
+       evidence_hash,
+    } => instructions::challenge_proof(program_id, accounts, epoch_id, evidence_hash),
 
-    RewardInstruction::StakeTokens { amount } => instructions::stake_tokens(program_id, accounts, amount),
+    RewardInstruction::FinalizeEpoch { epoch_id } => instructions::finalize_epoch(program_id, accounts, epoch_id),
 
-    RewardInstruction::UnstakeTokens { amount } => {
+    RewardInstruction::Stake { amount } => {
+      instructions::stake_tokens(program_id, accounts, amount)
+    }
+
+    RewardInstruction::Unstake { amount } => {
       instructions::unstake_tokens(program_id, accounts, amount)
     }
 
-    RewardInstruction::SlashMiner { amount } => instructions::slash_miner(program_id, accounts, amount),
+    RewardInstruction::Slash { 
+      miner,
+      amount,
+    } => instructions::slash_miner(program_id, accounts, miner, amount),
   }
 }

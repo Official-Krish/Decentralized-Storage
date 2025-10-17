@@ -1,26 +1,47 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use pinocchio::{msg, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
-use solana_program::{account_info::{next_account_info, AccountInfo}};
+use pinocchio::{account_info::AccountInfo, msg, program_error::ProgramError, pubkey::Pubkey, ProgramResult};
+use crate::{helpers::next_account, state::{GlobalState, MinerAccount}};
 
-use crate::state::MinerStake;
+pub fn slash_miner(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    _miner_pub: Pubkey,
+    amount: u64,
+) -> ProgramResult {
+    let accounts_iter = &mut accounts.iter();
+    let admin = next_account(accounts_iter)?;
+    let miner_account = next_account(accounts_iter)?;
+    let global_account = next_account(accounts_iter)?;
 
-pub fn slash_miner(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64) -> ProgramResult {
-    let account_info_iter = &mut accounts.iter();
-    let admin = next_account_info(account_info_iter).map_err(|_| ProgramError::NotEnoughAccountKeys)?; 
-    let miner_stake_account = next_account_info(account_info_iter).map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-
-    if !admin.is_signer {
+    if !admin.is_signer() {
+        msg!("Admin must sign");
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    //TODO: check admin == global.admin
-    // TODO: Burn part of miner stake or transfer to reward vault
-    let mut miner_stake = MinerStake::try_from_slice(&miner_stake_account.data.borrow()).map_err(|_| ProgramError::InvalidAccountData)?;
-    miner_stake.staked_amount = miner_stake.staked_amount.saturating_sub(amount);
-    miner_stake.reputation_score = miner_stake.reputation_score.saturating_sub(10);
-    miner_stake.serialize(&mut *miner_stake_account.data.borrow_mut()).map_err(|_| ProgramError::AccountDataTooSmall)?;
+    let global_data = global_account.try_borrow_data()?;
+    let global_state = GlobalState::try_from_slice(&global_data).map_err(|_| {
+        msg!("Failed to deserialize global state");
+        ProgramError::InvalidAccountData
+    })?;
 
+    if global_state.admin != *admin.key() {
+        msg!("Not authorized admin");
+        return Err(ProgramError::IllegalOwner);
+    }
 
-    msg!(&format!("slashed miner {} by {}", miner_stake.miner, amount));
+    let mut miner_data = miner_account.try_borrow_mut_data()?;
+    let mut miner_acc = MinerAccount::try_from_slice(&miner_data).map_err(|_| {
+        msg!("Failed to deserialize miner account");
+        ProgramError::InvalidAccountData
+    })?;
+
+    miner_acc.stake = miner_acc.stake.saturating_sub(amount);
+    miner_acc.reputation = miner_acc.reputation.saturating_sub(10);
+    miner_acc.serialize(&mut &mut miner_data[..]).map_err(|_| {
+        msg!("Failed to serialize miner account");
+        ProgramError::InvalidAccountData
+    })?;
+
+    msg!(&format!("EVENT:MinerSlashed:{}", amount));
     Ok(())
 }

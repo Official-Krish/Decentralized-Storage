@@ -1,71 +1,97 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use pinocchio::{msg, program_error::ProgramError, pubkey::Pubkey, sysvars::{clock::Clock, Sysvar}, ProgramResult};
-use solana_program::{
-    account_info::{next_account_info, AccountInfo},
-};
+use pinocchio::{account_info::AccountInfo, msg, program_error::ProgramError, pubkey::Pubkey, sysvars::{clock::Clock, Sysvar}, ProgramResult};
 
-use crate::state::{Challenge, ChallengeStatus, MinerStake};
+use crate::{helpers::{miner_pda, next_account}, state::{EpochRecord, EpochStatus, GlobalState, MinerAccount}};
 
 pub fn submit_proof(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    challenge_id: u128,
-    proof_hash: [u8; 32]
+    epoch_id: u128,
+    proof_hash: [u8; 32],
 ) -> ProgramResult {
-    let account_info_iter = &mut accounts.iter();
-    let miner = next_account_info(account_info_iter).map_err(|_| {
-        ProgramError::InvalidAccountData
-    })?;
+    let accounts_iter = &mut accounts.iter();
+    let miner = next_account(accounts_iter)?;
+    let epoch_account = next_account(accounts_iter)?;
+    let miner_account = next_account(accounts_iter)?;
+    let global_account = next_account(accounts_iter)?;
 
-    let challenge_account = next_account_info(account_info_iter).map_err(|_| {
-        ProgramError::InvalidAccountData
-    })?;
-
-    let data_proof_account = next_account_info(account_info_iter).map_err(|_| {
-        ProgramError::InvalidAccountData
-    })?;
-
-    let miner_stake_account = next_account_info(account_info_iter).map_err(|_| {
-        ProgramError::InvalidAccountData
-    })?;
-
-    if !miner.is_signer {
+    if !miner.is_signer() {
+        msg!("Miner must sign");
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let mut challenge: Challenge = Challenge::try_from_slice(&challenge_account.data.borrow())
-        .map_err(|_| ProgramError::InvalidAccountData)?;
+    let mut epoch_data = epoch_account.try_borrow_mut_data()?;
+    let mut epoch: EpochRecord = EpochRecord::try_from_slice(&epoch_data).map_err(|_| {
+        msg!("Failed to deserialize epoch record");
+        ProgramError::InvalidAccountData
+    })?;
 
-    if challenge.challenge_id != challenge_id {
-        msg!("challenge id mismatch");
-        return Err(ProgramError::InvalidAccountData);
+    if epoch.epoch_id != epoch_id {
+        msg!("Epoch ID mismatch");
+        return Err(ProgramError::InvalidArgument);
     }
 
-    if challenge.status != ChallengeStatus::Open {
-        msg!("challenge is not open");
-        return Err(ProgramError::InvalidAccountData);
+    if epoch.status != EpochStatus::Open {
+        msg!("Epoch not open");
+        return Err(ProgramError::InvalidArgument);
     }
 
-    let now = Clock::get()?.unix_timestamp;
-    if now > challenge.expires_at {
-        msg!("challenge has expired");
-        return Err(ProgramError::InvalidAccountData);
+    let clock = Clock::get()?;
+    if clock.unix_timestamp > epoch.deadline_ts {
+        epoch.status = EpochStatus::Challenged;
+        epoch.serialize(&mut &mut epoch_data[..]).map_err(|_| {
+            msg!("Failed to serialize epoch record");
+            ProgramError::InvalidAccountData
+        })?;
+        msg!("Submission too late");
+        return Err(ProgramError::Custom(1));
     }
 
-    // TODO: must verify merkle inclusion path here using provided proof path.
+    epoch.solver = Some(*miner.key());
+    epoch.proof_hash = proof_hash;
+    epoch.status = EpochStatus::Submitted;
+    epoch.serialize(&mut &mut epoch_data[..]).map_err(|_| {
+        msg!("Failed to serialize epoch record");
+        ProgramError::InvalidAccountData
+    })?;
 
-    challenge.solver = Some(*miner.key);
-    challenge.status = ChallengeStatus::Solved;
-    challenge.serialize(&mut *challenge_account.data.borrow_mut())
-        .map_err(|_| ProgramError::InvalidAccountData)?;
+    let (expected_miner, _) = miner_pda(program_id, miner.key());
+    if expected_miner != *miner_account.key() {
+        msg!("Miner account mismatch");
+        return Err(ProgramError::InvalidArgument);
+    }
 
-    let mut miner_stake: MinerStake = MinerStake::try_from_slice(&miner_stake_account.data.borrow()).map_err(|_| ProgramError::InvalidAccountData)?;
+    let mut miner_data = miner_account.try_borrow_mut_data().map_err(|_| {
+        msg!("Failed to borrow miner account data");
+        ProgramError::InvalidAccountData
+    })?;
+    let mut miner_acc = MinerAccount::try_from_slice(&miner_data).map_err(|_| {
+        msg!("Failed to deserialize miner account");
+        ProgramError::InvalidAccountData
+    })?;
+    miner_acc.pending_rewards = miner_acc.pending_rewards.saturating_add(epoch.reward);
+    miner_acc.serialize(&mut &mut miner_data[..]).map_err(|_| {
+        msg!("Failed to serialize miner account");
+        ProgramError::InvalidAccountData
+    })?;
 
-    miner_stake.pending_rewards = miner_stake.pending_rewards.saturating_add(challenge.reward);
+    let mut global_data = global_account.try_borrow_mut_data().map_err(|_| {
+        msg!("Failed to borrow global account data");
+        ProgramError::InvalidAccountData
+    })?;
+    let mut global_state = GlobalState::try_from_slice(&global_data).map_err(|_| {
+        msg!("Failed to deserialize global state");
+        ProgramError::InvalidAccountData
+    })?;
+    if global_state.emission_cap >= epoch.reward {
+        global_state.total_minted = global_state.total_minted.saturating_add(epoch.reward);
+        global_state.emission_cap = global_state.emission_cap.saturating_sub(epoch.reward);
+    }
+    global_state.serialize(&mut &mut global_data[..]).map_err(|_| {
+        msg!("Failed to serialize global state");
+        ProgramError::InvalidAccountData
+    })?;
 
-    miner_stake.serialize(&mut *miner_stake_account.data.borrow_mut())
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-
-    msg!(&format!("challenge {} solved by {}: reward {}", challenge_id, miner.key, challenge.reward));
+    msg!(&format!("EVENT:EpochSubmitted:{}", epoch_id));
     Ok(())
 }
