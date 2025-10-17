@@ -1,44 +1,42 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use pinocchio::{msg, program_error::ProgramError, pubkey::Pubkey, sysvars::{clock::Clock, Sysvar}, ProgramResult};
-use solana_program::{account_info::{next_account_info, AccountInfo}, program::invoke_signed};
-
-use crate::state::MinerStake;
+use pinocchio::{account_info::AccountInfo, msg, program_error::ProgramError, pubkey::Pubkey, sysvars::{clock::Clock, Sysvar}, ProgramResult};
+use crate::{helpers::next_account, state::MinerAccount};
+use pinocchio_token::instructions::{Transfer};
 
 pub fn stake_tokens(program_id: &Pubkey, accounts: &[AccountInfo], amount: u64) -> ProgramResult {
-    let account_info_iter = &mut accounts.iter();
-    let miner = next_account_info(account_info_iter).map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-    let miner_token_acc = next_account_info(account_info_iter).map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-    let miner_stake_account = next_account_info(account_info_iter).map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-    let token_program = next_account_info(account_info_iter).map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-    let stake_vault_account = next_account_info(account_info_iter).map_err(|_| ProgramError::NotEnoughAccountKeys)?;
+    let accounts_iter = &mut accounts.iter();
+    let miner = next_account(accounts_iter)?;
+    let miner_token_account = next_account(accounts_iter)?;
+    let stake_vault = next_account(accounts_iter)?;
+    let miner_account = next_account(accounts_iter)?;
+    let _token_program = next_account(accounts_iter)?;
 
-
-    if !miner.is_signer {
-    return Err(ProgramError::MissingRequiredSignature);
+    if !miner.is_signer() {
+        msg!("Miner must sign");
+        return Err(ProgramError::MissingRequiredSignature);
     }
 
-
-    let ix = spl_token::instruction::transfer(
-        token_program.key,
-        miner_token_acc.key,
-        stake_vault_account.key,
-        miner.key,
-        &[],
+    Transfer {
+        from: miner_token_account,
+        to: stake_vault,
+        authority: miner,
         amount,
-    ).map_err(|_| ProgramError::InvalidInstructionData)?;
+    }.invoke()?;
 
+    let mut miner_data = miner_account.try_borrow_mut_data()?;
+    let mut miner_acc = MinerAccount::try_from_slice(&miner_data).map_err(|_| {
+        msg!("Failed to deserialize miner account");
+        ProgramError::InvalidAccountData
+    })?;
+    miner_acc.stake = miner_acc.stake.saturating_add(amount);
+    
+    let clock = Clock::get()?;
+    miner_acc.unstake_ts = clock.unix_timestamp + 3600;
+    miner_acc.serialize(&mut &mut miner_data[..]).map_err(|_| {
+        msg!("Failed to serialize miner account");
+        ProgramError::InvalidAccountData
+    })?;
 
-    invoke_signed(&ix, &[miner_token_acc.clone(), stake_vault_account.clone(), token_program.clone()], &[])
-        .map_err(|_| ProgramError::Custom(2))?;
-
-
-    let mut miner_stake = MinerStake::try_from_slice(&miner_stake_account.data.borrow())
-        .map_err(|_| ProgramError::InvalidAccountData)?;
-
-    miner_stake.staked_amount = miner_stake.staked_amount.saturating_add(amount);
-    miner_stake.unstake_available_at = Clock::get()?.unix_timestamp + 3600;
-    miner_stake.serialize(&mut *miner_stake_account.data.borrow_mut()).map_err(|_| ProgramError::InvalidAccountData)?;
-
-    msg!(&format!("miner {} staked {}", miner.key, amount));
+    msg!(&format!("EVENT:Staked:{:?}:{}", miner.key(), amount));
     Ok(())
 }

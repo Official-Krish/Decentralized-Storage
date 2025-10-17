@@ -1,17 +1,19 @@
 pub mod initialise;
-pub mod register_proof;
-pub mod create_challenge;
+pub mod register_object;
+pub mod create_epoch;
 pub mod submit_proof;
-pub mod claim_reward;
+pub mod challenge_proof;
 pub mod stake_tokens;
 pub mod unstake_tokens;
 pub mod slash_miner;
+pub mod finalize_espoch;
 
 pub use initialise::*;
-pub use register_proof::*;
-pub use create_challenge::*;
+pub use register_object::*;
+pub use create_epoch::*;
 pub use submit_proof::*;
-pub use claim_reward::*;
+pub use challenge_proof::*;
 pub use stake_tokens::*;
 pub use unstake_tokens::*;
 pub use slash_miner::*;
+pub use finalize_espoch::*;

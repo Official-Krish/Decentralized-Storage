@@ -1,45 +1,47 @@
 use borsh::BorshSerialize;
-use solana_program::{
-    account_info::{next_account_info, AccountInfo},
-};
-use pinocchio::{msg, program_error::ProgramError, pubkey::Pubkey, sysvars::{clock::Clock, Sysvar}, ProgramResult};
+use pinocchio::{account_info::AccountInfo, msg, program_error::ProgramError, pubkey::Pubkey, sysvars::{clock::Clock, Sysvar}, ProgramResult};
 
-use crate::state::GlobalState;
+use crate::{helpers::{global_pda, next_account}, state::GlobalState};
 
 pub fn initialize(
-  program_id: &Pubkey,
-  accounts: &[AccountInfo],
-  decay_numerator: u64,
-  decay_denom: u64,
-  emission_cap: u64,
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    decay_n: u64,
+    decay_d: u64,
+    emission_cap: u64,
 ) -> ProgramResult {
-    let account_info_iter = &mut accounts.iter();
-    let admin = next_account_info(account_info_iter)
-        .map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-    let global_state_account = next_account_info(account_info_iter)
-        .map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-    let reward_mint = next_account_info(account_info_iter)
-        .map_err(|_| ProgramError::NotEnoughAccountKeys)?;
-    let reward_vault = next_account_info(account_info_iter)
-        .map_err(|_| ProgramError::NotEnoughAccountKeys)?;
+    let accounts_iter = &mut accounts.iter();
+    let admin = next_account(accounts_iter)?;
+    let global_account = next_account(accounts_iter)?;
+    let tape_mint_account = next_account(accounts_iter)?;
+    let reward_vault_account = next_account(accounts_iter)?;
 
-    if !admin.is_signer {
+    if !admin.is_signer() {
+        msg!("Admin must sign");
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let global = GlobalState {
-        admin: *admin.key,
-        reward_mint: *reward_mint.key,
-        reward_vault: *reward_vault.key,
-        total_minted: 0,
+    let (expected_global, bump) = global_pda(program_id);
+    if expected_global != *global_account.key() {
+        msg!("Global PDA mismatch");
+        return Err(ProgramError::InvalidArgument);
+    }
+
+    let clock = Clock::get()?;
+    let global_state = GlobalState {
+        admin: *admin.key(),
+        reward_vault: *reward_vault_account.key(),
         emission_cap,
-        decay_numerator,
-        decay_denom,
-        last_decay_at: Clock::get()?.unix_timestamp,
+        reward_mint: *tape_mint_account.key(),
+        total_minted: 0,
+        decay_numerator: decay_n,
+        decay_denom: decay_d,
+        last_decay_at: clock.unix_timestamp,
     };
 
-    global.serialize(&mut *global_state_account.data.borrow_mut()).map_err(|_| ProgramError::InvalidArgument)?;
+    let mut data = global_account.try_borrow_mut_data()?;
+    global_state.serialize(&mut &mut data[..]).map_err(|_| ProgramError::AccountDataTooSmall)?;
 
-    msg!(&format!("Global state initialized"));
+    msg!("EVENT:Initialized");
     Ok(())
 }
